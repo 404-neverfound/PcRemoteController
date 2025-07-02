@@ -1,0 +1,18 @@
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userprefs
+*.sln.docstates
+
+# C++ IntelliSense
+*.vcxproj.user
+*.vcxproj.filters
+
+# 其他临时或编译文件
+bin/
+obj/
+*.exe
+*.out
+*.dll

@@ -1,1 +1,2 @@
 # PcRemoteController
+用于辅助远程控制电脑
