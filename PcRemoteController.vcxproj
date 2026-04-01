@@ -122,9 +122,15 @@
     <ClCompile Include="src\api_server.cpp" />
     <ClCompile Include="src\cmd_contorller.cpp" />
     <ClCompile Include="src\controller\VolumeController.cpp" />
+    <ClCompile Include="src\controller\MediaController.cpp" />
+    <ClCompile Include="src\controller\BluetoothController.cpp" />
+    <ClCompile Include="src\controller\SleepController.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\controller\VolumeController.h" />
+    <ClInclude Include="src\controller\MediaController.h" />
+    <ClInclude Include="src\controller\BluetoothController.h" />
+    <ClInclude Include="src\controller\SleepController.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

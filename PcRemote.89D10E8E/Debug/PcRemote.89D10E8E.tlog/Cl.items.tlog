@@ -1,2 +1,6 @@
 D:\Code\PcRemoteController\src\api_server.cpp;D:\Code\PcRemoteController\PcRemote.89D10E8E\Debug\api_server.obj
 D:\Code\PcRemoteController\src\cmd_contorller.cpp;D:\Code\PcRemoteController\PcRemote.89D10E8E\Debug\cmd_contorller.obj
+D:\Code\PcRemoteController\src\controller\VolumeController.cpp;D:\Code\PcRemoteController\PcRemote.89D10E8E\Debug\VolumeController.obj
+D:\Code\PcRemoteController\src\controller\MediaController.cpp;D:\Code\PcRemoteController\PcRemote.89D10E8E\Debug\MediaController.obj
+D:\Code\PcRemoteController\src\controller\BluetoothController.cpp;D:\Code\PcRemoteController\PcRemote.89D10E8E\Debug\BluetoothController.obj
+D:\Code\PcRemoteController\src\controller\SleepController.cpp;D:\Code\PcRemoteController\PcRemote.89D10E8E\Debug\SleepController.obj
