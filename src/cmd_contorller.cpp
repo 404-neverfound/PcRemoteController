@@ -14,6 +14,11 @@ bool g_DebugMode = true;
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine, int iCmdShow) {
     try {
+        int helperExitCode = 0;
+        if (SleepController::HandleHelperMode(helperExitCode)) {
+            return helperExitCode;
+        }
+
         std::string cmd(szCmdLine);
 
         if (cmd.find("--debug") != std::string::npos) {
