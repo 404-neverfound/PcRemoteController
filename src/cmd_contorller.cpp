@@ -11,6 +11,7 @@
 #include "controller/MediaController.h"
 #include "controller/KeyboardController.h"
 #include "controller/SleepController.h"
+#include "controller/TextController.h"
 #include "device/KeyboardDevices.h"
 #include "device/KeyboardGuard.h"
 #include "utils/Console.h"
@@ -49,6 +50,10 @@ static void PrintHelp() {
     Console::WriteLine("  设置音量 <0-100>      默认 50");
     Console::WriteLine("媒体:");
     Console::WriteLine("  暂停 / 播放");
+    Console::WriteLine("文字:");
+    Console::WriteLine("  输入文字 <文本>       输入到当前前台窗口");
+    Console::WriteLine("  粘贴文字 <文本>       通过剪贴板粘贴（会覆盖剪贴板）");
+    Console::WriteLine("  复制文字 <文本>       只写入剪贴板，不执行粘贴");
     Console::WriteLine("键盘（需要管理员权限）:");
     Console::WriteLine("  关闭键盘 / 打开键盘");
     Console::WriteLine("电源:");
@@ -145,10 +150,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine,
             if (log) fclose(log);
         }
 
-        LOG("Raw input: %s\n", cmd.c_str());
+        // The text after 输入文字/粘贴文字 may contain passwords or other
+        // secrets; log only the size for those commands.
+        if (TextController::LooksLikeTextCommand(cmd)) {
+            LOG("Raw input: text command (%d bytes)\n", (int)cmd.length());
+        } else {
+            LOG("Raw input: %s\n", cmd.c_str());
+        }
         LOG("Input length: %d\n", (int)cmd.length());
 
         std::vector<BaseController*> controllers = {
+            // TextController must stay first: it accepts arbitrary text after
+            // its prefix, which may contain other controllers' keywords.
+            new TextController(),
             new VolumeController(),
             new KeyboardController(),
             new SleepController(),

@@ -126,12 +126,14 @@
     <ClCompile Include="src\agent\AgentClient.cpp" />
     <ClCompile Include="src\agent\AgentInstall.cpp" />
     <ClCompile Include="src\agent\AgentServer.cpp" />
+    <ClCompile Include="src\agent\DesktopNotify.cpp" />
     <ClCompile Include="src\api_server.cpp" />
     <ClCompile Include="src\cmd_contorller.cpp" />
     <ClCompile Include="src\controller\VolumeController.cpp" />
     <ClCompile Include="src\controller\MediaController.cpp" />
     <ClCompile Include="src\controller\KeyboardController.cpp" />
     <ClCompile Include="src\controller\SleepController.cpp" />
+    <ClCompile Include="src\controller\TextController.cpp" />
     <ClCompile Include="src\device\KeyboardDevices.cpp" />
     <ClCompile Include="src\device\KeyboardGuard.cpp" />
   </ItemGroup>

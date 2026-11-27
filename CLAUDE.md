@@ -39,13 +39,15 @@ Console output requires a caller that waits for the GUI process (direct invocati
 
 Do not disable the keyboard for a casual test unless you can SSH back in to re-enable it or are prepared to reboot (the guard task restores it at boot). `--debug` truncates `D:\debug.txt`.
 
+Do not run text commands as a casual test: `输入文字` / `粘贴文字` inject keystrokes into the current foreground window, and `粘贴文字` / `复制文字` overwrite the clipboard. `复制文字` also shows a desktop overlay.
+
 ## Entry point and command dispatch
 
 `src/cmd_contorller.cpp:WinMain`:
 
 1. Handles ASCII internal modes via `HasArg`: `--help` / `--list-commands`, `--agent`, `--install-agent`, `--uninstall-agent`, `--agent-ping`, `--list-keyboards`, `--enable-keyboard`, `--install-keyboard-guard`, `--uninstall-keyboard-guard`. `--agent` returns before console setup; every other mode calls `Console::EnsureAttached()` first and prints a short result.
 2. `SleepController::HandleHelperMode` handles the internal sleep helper (`--delayed-suspend <ms> [--scheduled]`).
-3. Otherwise the ANSI command line (`szCmdLine`, GBK) is matched as a substring by controllers; **first match wins**. Order: Volume → Keyboard → Sleep → Media. `Execute` returns `bool`; `WinMain` maps it to exit code 0/1 and returns 2 when no controller matched.
+3. Otherwise the ANSI command line (`szCmdLine`, GBK) is matched by controllers; **first match wins**. Order: Text → Volume → Keyboard → Sleep → Media. `TextController` uses prefix matching (after optional leading whitespace and an optional leading `--debug`) and must stay first: the typed text after its keyword may contain other controllers' keywords. `Execute` returns `bool`; `WinMain` maps it to exit code 0/1 and returns 2 when no controller matched.
 
 Chinese literals are UTF-8 in source; each controller has a local `GBK()` helper that converts them to the ANSI code page before comparing with `szCmdLine`. Keep that pattern when adding Chinese keywords. Console result strings stay UTF-8 and go through `src/utils/Console.h`. Register new controllers in `cmd_contorller.cpp` (order matters) and in `PcRemoteController.vcxproj`.
 
@@ -54,6 +56,7 @@ Chinese literals are UTF-8 in source; each controller has a local `GBK()` helper
 ### Controller model
 `src/controller/BaseController.h` defines `Match(const std::string&)` / `Execute(const std::string&)`; `Execute` returns `true` on success and prints a short Chinese result line.
 
+- **TextController** — 输入文字 / 粘贴文字 / 复制文字; prefix-matched and registered first; sends base64 UTF-8 to the agent, which types it via Unicode `SendInput`, pastes from the clipboard, or only writes the clipboard.
 - **VolumeController** — Core Audio `IAudioEndpointVolume`; keywords 音量增加/提高音量/增加音量, 音量减少/降低音量/减少音量, 设置音量, with an optional number (defaults 5 / 50).
 - **KeyboardController** — 关闭键盘 / 打开键盘; delegates to `src/device/KeyboardDevices.*` and `src/device/KeyboardGuard.*`.
 - **SleepController** — 休眠; waits ~1 s, then `SetSuspendState`.
@@ -66,7 +69,8 @@ SSH commands run in session 0, where `SendInput` cannot reach the desktop. `src/
 
 - The agent runs as the logged-on user in the interactive session, started by the logon task `PcRemoteController_Agent` (`--agent`).
 - Pipe name: `\\.\pipe\PcRemoteController.Agent.<sessionId>`; the session id routes the CLI to the correct desktop when multiple sessions exist.
-- Protocol: newline-terminated `PCR1 <command>`; implemented commands are `ping` and `media.toggle`; replies are `OK` / `ERR <code> <msg>`.
+- Protocol: newline-terminated `PCR1 <command>`; implemented commands are `ping`, `media.toggle`, `input.text <base64>`, `input.paste <base64>` and `input.copy <base64>`; replies are `OK` / `ERR <code> <msg>`.
+- Text commands carry base64-encoded UTF-8. The message limit is 256 KB and a single input is capped at 20000 UTF-16 units. `input.text` uses Unicode `SendInput` (Enter/Tab for `\n`/`\t`); `input.paste` writes `CF_UNICODETEXT` and sends Ctrl+V; `input.copy` writes `CF_UNICODETEXT` only. Clipboard writes overwrite the previous contents. `input.copy` also shows a best-effort desktop overlay containing only the character count. Typing/pasting targets the current foreground window and is subject to UIPI: the non-elevated agent cannot inject into elevated windows.
 - `AgentClient` finds the explorer session, connects, and if the pipe is missing runs `schtasks /run /tn PcRemoteController_Agent`, then retries.
 - The pipe DACL grants the current user and SYSTEM. `PIPE_REJECT_REMOTE_CLIENTS` belongs in the **pipe-mode** argument of `CreateNamedPipeW`, not the open mode.
 - The agent is not elevated: it must not perform device/admin operations. Those stay in the CLI (the SSH shell is elevated).
@@ -89,8 +93,11 @@ The suspend must happen after the SSH call returns, but Windows OpenSSH puts chi
 ### Console output
 `src/utils/Console.h` provides best-effort stdout/stderr for the GUI-subsystem exe. `Console::EnsureAttached()` calls `AttachConsole(ATTACH_PARENT_PROCESS)` and falls back to `CONOUT$`; real consoles receive UTF-16 through `WriteConsoleW`, pipes and redirected files receive UTF-8 bytes through `WriteFile`. There is deliberately no `AllocConsole`, so the agent and scheduled helpers never pop a window; when no console or pipe exists, writes are no-ops. Detailed diagnostics stay in the log.
 
+### Desktop notification
+`src/agent/DesktopNotify.*` shows a self-drawn notification overlay instead of a `Shell_NotifyIcon` balloon. A short-lived `_beginthreadex` worker creates a layered, topmost, no-activate window at the bottom-right of the primary work area, draws an antialiased success check icon (GDI+) and a single message line (GDI), fades in/out, and destroys itself after ~3.5 s. It is used by `input.copy` after a successful clipboard write. The overlay is DPI-aware and needs no AppUserModelID or Start Menu shortcut; it is not added to the Action Center. The call is asynchronous and best-effort, failure is logged, and the message contains only the character count.
+
 ### Logging
-`src/utils/Logger.h`: `LOG` appends to `D:\debug.txt` via `fopen(..., "a")`; `g_DebugMode` defaults to true. **Capture `GetLastError()` before calling `LOG`** — the `fopen` inside the macro overwrites it. Existing code follows this; keep the pattern in new error paths.
+`src/utils/Logger.h`: `LOG` appends to `D:\debug.txt` via `fopen(..., "a")`; `g_DebugMode` defaults to true. **Capture `GetLastError()` before calling `LOG`** — the `fopen` inside the macro overwrites it. Existing code follows this; keep the pattern in new error paths. Text input payloads must never be logged: `WinMain`, `TextController`, `AgentClient` and `AgentServer` log only the mode and length.
 
 ## Operational notes
 

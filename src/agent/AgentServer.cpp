@@ -1,17 +1,26 @@
 #include "AgentServer.h"
+#include "DesktopNotify.h"
 #include "../utils/Logger.h"
 #include <windows.h>
+#include <wincrypt.h>
 #include <sddl.h>
+#include <cstring>
+#include <cwchar>
 #include <string>
 #include <vector>
+
+#pragma comment(lib, "Crypt32.lib")
 
 // The agent runs once per interactive session. The session id is part of the
 // pipe name so a client always reaches the agent of the desktop session it
 // targets, even when several users/sessions are logged on at the same time.
 static const wchar_t* kPipePrefix = L"\\\\.\\pipe\\PcRemoteController.Agent.";
 static const wchar_t* kMutexPrefix = L"Local\\PcRemoteController.Agent.";
-static const DWORD kMaxMessageBytes = 1024;
-static const DWORD kRequestTimeoutMs = 5000;
+// Text input is base64-encoded on the wire, so allow a payload large enough
+// for the ~32K UTF-16 limit of a Windows command line.
+static const DWORD kMaxMessageBytes = 256 * 1024;
+static const DWORD kRequestTimeoutMs = 10000;
+static const size_t kMaxInputUnits = 20000;
 
 // Grants the current user and SYSTEM access to the pipe. Remote access is
 // rejected by PIPE_REJECT_REMOTE_CLIENTS, so SMB clients can never connect.
@@ -79,6 +88,209 @@ static bool SendMediaToggleKey() {
     return true;
 }
 
+static bool Base64Decode(const std::string& input, std::string& output) {
+    output.clear();
+    if (input.empty()) {
+        return true;
+    }
+
+    DWORD size = 0;
+    if (!CryptStringToBinaryA(input.c_str(), (DWORD)input.size(), CRYPT_STRING_BASE64,
+                              NULL, &size, NULL, NULL)) {
+        return false;
+    }
+
+    output.resize(size);
+    if (size == 0) {
+        return true;
+    }
+    if (!CryptStringToBinaryA(input.c_str(), (DWORD)input.size(), CRYPT_STRING_BASE64,
+                              reinterpret_cast<BYTE*>(&output[0]), &size, NULL, NULL)) {
+        output.clear();
+        return false;
+    }
+    output.resize(size);
+    return true;
+}
+
+static bool Utf8ToWide(const std::string& text, std::wstring& result) {
+    result.clear();
+    if (text.empty()) {
+        return true;
+    }
+    int len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                  text.data(), (int)text.size(), NULL, 0);
+    if (len <= 0) {
+        return false;
+    }
+    result.resize(len);
+    return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                               text.data(), (int)text.size(),
+                               &result[0], len) == len;
+}
+
+// Types text into the currently focused window. Newlines become Enter and
+// tabs become Tab; every other UTF-16 unit is sent as a Unicode key event.
+static bool SendUnicodeText(const std::wstring& text) {
+    static const size_t kChunkEvents = 128;
+    std::vector<INPUT> events;
+    events.reserve(kChunkEvents);
+
+    auto flush = [&events]() -> bool {
+        if (events.empty()) {
+            return true;
+        }
+        UINT sent = SendInput((UINT)events.size(), events.data(), sizeof(INPUT));
+        if (sent != events.size()) {
+            DWORD error = GetLastError();
+            LOG("Agent: SendInput text failed: sent=%u/%u error=%lu\n",
+                sent, (UINT)events.size(), error);
+            events.clear();
+            return false;
+        }
+        events.clear();
+        return true;
+    };
+
+    for (wchar_t ch : text) {
+        INPUT down = {};
+        INPUT up = {};
+        down.type = INPUT_KEYBOARD;
+        up.type = INPUT_KEYBOARD;
+
+        if (ch == L'\r' || ch == L'\n') {
+            down.ki.wVk = VK_RETURN;
+            up.ki.wVk = VK_RETURN;
+            up.ki.dwFlags = KEYEVENTF_KEYUP;
+        } else if (ch == L'\t') {
+            down.ki.wVk = VK_TAB;
+            up.ki.wVk = VK_TAB;
+            up.ki.dwFlags = KEYEVENTF_KEYUP;
+        } else {
+            down.ki.wScan = ch;
+            down.ki.dwFlags = KEYEVENTF_UNICODE;
+            up.ki.wScan = ch;
+            up.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+        }
+
+        events.push_back(down);
+        events.push_back(up);
+        if (events.size() >= kChunkEvents) {
+            if (!flush()) {
+                return false;
+            }
+        }
+    }
+    return flush();
+}
+
+// Writes the text to the clipboard. The previous clipboard contents are not
+// restored. Returns false when the clipboard is locked or allocation fails.
+static bool SetClipboardText(const std::wstring& text) {
+    bool opened = false;
+    for (int attempt = 0; attempt < 10; ++attempt) {
+        if (OpenClipboard(NULL)) {
+            opened = true;
+            break;
+        }
+        Sleep(50);
+    }
+    if (!opened) {
+        DWORD error = GetLastError();
+        LOG("Agent: OpenClipboard failed: %lu\n", error);
+        return false;
+    }
+
+    bool copied = false;
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, (text.size() + 1) * sizeof(wchar_t));
+    if (memory) {
+        void* data = GlobalLock(memory);
+        if (data) {
+            memcpy(data, text.c_str(), (text.size() + 1) * sizeof(wchar_t));
+            GlobalUnlock(memory);
+            if (EmptyClipboard() && SetClipboardData(CF_UNICODETEXT, memory)) {
+                memory = NULL; // now owned by the clipboard
+                copied = true;
+            }
+        }
+        if (memory) {
+            GlobalFree(memory);
+        }
+    }
+    if (!copied) {
+        DWORD error = GetLastError();
+        LOG("Agent: clipboard write failed: %lu\n", error);
+    }
+    CloseClipboard();
+    return copied;
+}
+
+// Writes the text to the clipboard and sends Ctrl+V.
+static bool PasteText(const std::wstring& text) {
+    if (!SetClipboardText(text)) {
+        return false;
+    }
+
+    Sleep(50);
+    INPUT input[4] = {};
+    input[0].type = INPUT_KEYBOARD;
+    input[0].ki.wVk = VK_CONTROL;
+    input[1].type = INPUT_KEYBOARD;
+    input[1].ki.wVk = 'V';
+    input[2].type = INPUT_KEYBOARD;
+    input[2].ki.wVk = 'V';
+    input[2].ki.dwFlags = KEYEVENTF_KEYUP;
+    input[3].type = INPUT_KEYBOARD;
+    input[3].ki.wVk = VK_CONTROL;
+    input[3].ki.dwFlags = KEYEVENTF_KEYUP;
+
+    UINT sent = SendInput(4, input, sizeof(INPUT));
+    if (sent != 4) {
+        DWORD error = GetLastError();
+        LOG("Agent: SendInput Ctrl+V failed: sent=%u error=%lu\n", sent, error);
+        return false;
+    }
+    return true;
+}
+
+enum class InputMode {
+    Text,
+    Paste,
+    Copy
+};
+
+static std::string HandleTextCommand(const std::string& command,
+                                     const std::string& prefix, InputMode mode) {
+    std::string encoded = command.substr(prefix.size());
+    std::string utf8;
+    if (!Base64Decode(encoded, utf8)) {
+        return "ERR 400 invalid base64\n";
+    }
+
+    std::wstring text;
+    if (!Utf8ToWide(utf8, text) || text.empty()) {
+        return "ERR 400 empty text\n";
+    }
+    if (text.size() > kMaxInputUnits) {
+        return "ERR 413 text too long\n";
+    }
+
+    bool ok = false;
+    if (mode == InputMode::Text) {
+        ok = SendUnicodeText(text);
+    } else if (mode == InputMode::Paste) {
+        ok = PasteText(text);
+    } else {
+        ok = SetClipboardText(text);
+        if (ok) {
+            wchar_t message[128];
+            swprintf_s(message, L"文字已复制到剪贴板（%d 个字符）", (int)text.size());
+            DesktopNotify::Show(message);
+        }
+    }
+    return ok ? "OK\n" : "ERR 500 input failed\n";
+}
+
 // Reads one newline-terminated request with a timeout so a stalled client
 // cannot block the agent forever.
 static bool ReadRequest(HANDLE pipe, std::string& request) {
@@ -123,10 +335,9 @@ static bool ReadRequest(HANDLE pipe, std::string& request) {
 }
 
 static std::string HandleRequest(const std::string& request) {
-    LOG("Agent: request: %s\n", request.c_str());
-
     static const std::string kPrefix = "PCR1 ";
     if (request.compare(0, kPrefix.size(), kPrefix) != 0) {
+        LOG("Agent: bad request (%d bytes)\n", (int)request.size());
         if (request.compare(0, 3, "PCR") == 0) {
             return "ERR 426 version mismatch\n";
         }
@@ -134,11 +345,33 @@ static std::string HandleRequest(const std::string& request) {
     }
 
     std::string command = request.substr(kPrefix.size());
+
+    static const std::string kTextPrefix = "input.text ";
+    static const std::string kPastePrefix = "input.paste ";
+    static const std::string kCopyPrefix = "input.copy ";
+    static const std::string kInputPrefix = "input.";
+    bool isTextInput = command.compare(0, kInputPrefix.size(), kInputPrefix) == 0;
+    if (isTextInput) {
+        // Do not log the text payload.
+        LOG("Agent: request: text input (%d bytes)\n", (int)request.size());
+    } else {
+        LOG("Agent: request: %s\n", request.c_str());
+    }
+
     if (command == "ping") {
         return "OK\n";
     }
     if (command == "media.toggle") {
         return SendMediaToggleKey() ? "OK\n" : "ERR 500 send failed\n";
+    }
+    if (command.compare(0, kTextPrefix.size(), kTextPrefix) == 0) {
+        return HandleTextCommand(command, kTextPrefix, InputMode::Text);
+    }
+    if (command.compare(0, kPastePrefix.size(), kPastePrefix) == 0) {
+        return HandleTextCommand(command, kPastePrefix, InputMode::Paste);
+    }
+    if (command.compare(0, kCopyPrefix.size(), kCopyPrefix) == 0) {
+        return HandleTextCommand(command, kCopyPrefix, InputMode::Copy);
     }
     return "ERR 404 unknown command\n";
 }

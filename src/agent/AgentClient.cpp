@@ -8,7 +8,6 @@ static const wchar_t* kPipePrefix = L"\\\\.\\pipe\\PcRemoteController.Agent.";
 static const wchar_t* kAgentTaskName = L"PcRemoteController_Agent";
 static const DWORD kConnectTimeoutMs = 300;
 static const DWORD kStartTimeoutMs = 3000;
-static const DWORD kResponseTimeoutMs = 2000;
 
 static std::wstring SchtasksPath() {
     wchar_t dir[MAX_PATH];
@@ -139,9 +138,9 @@ static std::wstring FromUtf8(const std::string& text) {
     return result;
 }
 
-static bool ReadResponse(HANDLE pipe, std::string& response) {
+static bool ReadResponse(HANDLE pipe, std::string& response, DWORD timeoutMs) {
     std::string data;
-    DWORD64 deadline = GetTickCount64() + kResponseTimeoutMs;
+    DWORD64 deadline = GetTickCount64() + timeoutMs;
     char buffer[256];
 
     while (GetTickCount64() < deadline) {
@@ -178,7 +177,8 @@ static bool ReadResponse(HANDLE pipe, std::string& response) {
     return true;
 }
 
-bool AgentClient::SendCommand(const std::wstring& command, std::wstring& response) {
+bool AgentClient::SendCommand(const std::wstring& command, std::wstring& response,
+                              DWORD timeoutMs) {
     response.clear();
 
     DWORD sessionId = GetInteractiveSessionId();
@@ -209,7 +209,7 @@ bool AgentClient::SendCommand(const std::wstring& command, std::wstring& respons
     BOOL sent = WriteFile(pipe, request.data(), static_cast<DWORD>(request.size()), &written, NULL);
 
     std::string rawResponse;
-    bool received = sent && ReadResponse(pipe, rawResponse);
+    bool received = sent && ReadResponse(pipe, rawResponse, timeoutMs);
     CloseHandle(pipe);
 
     if (!received) {
@@ -219,7 +219,15 @@ bool AgentClient::SendCommand(const std::wstring& command, std::wstring& respons
     }
 
     response = FromUtf8(rawResponse);
-    LOG("AgentClient: sent '%ls', response '%ls'\n", command.c_str(), response.c_str());
+    if (command.compare(0, 6, L"input.") == 0) {
+        // Do not write the base64 text payload to the log: it may contain
+        // secrets. Log only the command name and payload size.
+        std::wstring name = command.substr(0, command.find(L' '));
+        LOG("AgentClient: sent '%ls' (%d bytes), response '%ls'\n",
+            name.c_str(), (int)command.size(), response.c_str());
+    } else {
+        LOG("AgentClient: sent '%ls', response '%ls'\n", command.c_str(), response.c_str());
+    }
     return rawResponse.compare(0, 2, "OK") == 0;
 }
 
