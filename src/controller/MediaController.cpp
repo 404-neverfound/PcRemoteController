@@ -1,5 +1,6 @@
 #include "MediaController.h"
 #include "../agent/AgentClient.h"
+#include "../utils/Console.h"
 #include "../utils/Logger.h"
 #include <windows.h>
 
@@ -20,7 +21,7 @@ bool MediaController::Match(const std::string& cmd) {
     return cmd.find(GBK("暂停")) != std::string::npos || cmd.find(GBK("播放")) != std::string::npos;
 }
 
-void MediaController::Execute(const std::string& cmd) {
+bool MediaController::Execute(const std::string& cmd) {
     (void)cmd;
     LOG("Match: media\n");
 
@@ -29,4 +30,12 @@ void MediaController::Execute(const std::string& cmd) {
     std::wstring response;
     bool ok = AgentClient::SendCommand(L"media.toggle", response);
     LOG("Media: agent request %s: %ls\n", ok ? "ok" : "failed", response.c_str());
+
+    if (ok) {
+        Console::WriteLine("媒体切换已发送");
+    } else {
+        std::string detail = Console::Utf8FromWide(response);
+        Console::WriteLine(detail.empty() ? "媒体切换失败" : "媒体切换失败: " + detail);
+    }
+    return ok;
 }

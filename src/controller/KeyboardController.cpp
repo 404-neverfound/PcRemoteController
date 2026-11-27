@@ -1,6 +1,7 @@
 #include "KeyboardController.h"
 #include "../device/KeyboardDevices.h"
 #include "../device/KeyboardGuard.h"
+#include "../utils/Console.h"
 #include "../utils/Logger.h"
 #include <windows.h>
 #include <vector>
@@ -23,25 +24,27 @@ bool KeyboardController::Match(const std::string& cmd) {
            cmd.find(GBK("打开键盘")) != std::string::npos;
 }
 
-void KeyboardController::Execute(const std::string& cmd) {
+bool KeyboardController::Execute(const std::string& cmd) {
     bool disable = cmd.find(GBK("关闭键盘")) != std::string::npos;
     bool enable = cmd.find(GBK("打开键盘")) != std::string::npos;
     if (!disable && !enable) {
-        return;
+        return false;
     }
 
     LOG("Match: keyboard %s\n", disable ? "off" : "on");
 
     if (!KeyboardDevices::IsElevated()) {
         LOG("Keyboard: administrator rights required\n");
-        return;
+        Console::WriteLine("键盘操作需要管理员权限");
+        return false;
     }
 
     std::vector<KeyboardDevices::Target> targets;
     std::wstring error;
     if (!KeyboardDevices::LoadTargets(targets, error)) {
         LOG("Keyboard: %s\n", KeyboardDevices::ToGbk(error).c_str());
-        return;
+        Console::WriteLine("键盘目标配置加载失败，详见 D:\\debug.txt");
+        return false;
     }
 
     if (disable) {
@@ -56,25 +59,45 @@ void KeyboardController::Execute(const std::string& cmd) {
         }
         if (!anyMatched) {
             LOG("Keyboard: no matching keyboard is present\n");
-            return;
+            Console::WriteLine("未找到匹配的键盘设备，已取消");
+            return false;
         }
 
         if (!KeyboardGuard::EnsureTask()) {
             LOG("Keyboard: cannot create restore task, refusing to disable\n");
-            return;
+            Console::WriteLine("无法创建开机恢复任务，已取消");
+            return false;
         }
         if (!KeyboardGuard::SetMarker()) {
             LOG("Keyboard: cannot write marker, refusing to disable\n");
-            return;
+            Console::WriteLine("无法写入状态标记，已取消");
+            return false;
         }
 
-        KeyboardDevices::SetState(false, targets);
-    } else {
-        KeyboardDevices::Counts counts = KeyboardDevices::SetState(true, targets);
-        if (counts.disabledAfter == 0) {
-            KeyboardGuard::ClearMarker();
+        KeyboardDevices::Counts counts = KeyboardDevices::SetState(false, targets);
+        bool ok = counts.matched > 0 && counts.failed == 0 &&
+                  counts.disabledAfter == counts.matched;
+        if (ok) {
+            Console::WriteLine("键盘已关闭");
         } else {
-            LOG("Keyboard: some devices are still disabled\n");
+            Console::WriteLine("键盘关闭未完全成功，详见 D:\\debug.txt");
         }
+        return ok;
     }
+
+    KeyboardDevices::Counts counts = KeyboardDevices::SetState(true, targets);
+    if (counts.matched == 0) {
+        LOG("Keyboard: no matching keyboard is present\n");
+        Console::WriteLine("未找到匹配的键盘设备");
+        return false;
+    }
+    if (counts.disabledAfter == 0) {
+        KeyboardGuard::ClearMarker();
+        Console::WriteLine("键盘已打开");
+        return true;
+    }
+
+    LOG("Keyboard: some devices are still disabled\n");
+    Console::WriteLine("键盘打开未完全成功，详见 D:\\debug.txt");
+    return false;
 }

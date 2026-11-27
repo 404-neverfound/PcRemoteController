@@ -1,4 +1,5 @@
 #include "SleepController.h"
+#include "../utils/Console.h"
 #include "../utils/Logger.h"
 #include <powrprof.h>
 #include <shellapi.h>
@@ -241,7 +242,7 @@ bool SleepController::Match(const std::string& cmd) {
     return cmd.find(GBK("休眠")) != std::string::npos;
 }
 
-void SleepController::Execute(const std::string& cmd) {
+bool SleepController::Execute(const std::string& cmd) {
     (void)cmd;
     LOG("Match: sleep\n");
 
@@ -249,17 +250,25 @@ void SleepController::Execute(const std::string& cmd) {
 
     if (SpawnHelperDirectly(helperArgs)) {
         LOG("Sleep helper started directly\n");
-        return;
+        Console::WriteLine("已安排休眠");
+        return true;
     }
 
     LOG("Trying one-shot scheduled task\n");
     if (SpawnHelperViaScheduler(helperArgs)) {
         LOG("Sleep helper started via Task Scheduler\n");
-        return;
+        Console::WriteLine("已安排休眠");
+        return true;
     }
 
     // Last resort: keep the old behaviour. The SSH call will not return before
     // the machine wakes up, but the machine does go to sleep.
     LOG("Helper could not be started, suspending immediately\n");
-    SetSuspendState(TRUE, FALSE, FALSE);
+    BOOL ok = SetSuspendState(TRUE, FALSE, FALSE);
+    if (ok) {
+        Console::WriteLine("正在休眠");
+    } else {
+        Console::WriteLine("休眠失败，详见 D:\\debug.txt");
+    }
+    return ok != FALSE;
 }

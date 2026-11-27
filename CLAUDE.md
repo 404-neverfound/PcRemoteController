@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Windows-only remote-control helper (`PcRemoteController.exe`, described in README as “用于辅助远程控制电脑”). It is normally invoked over Windows OpenSSH with one Chinese command, e.g. `PcRemoteController.exe 关闭键盘`. It is a GUI-subsystem executable (`WinMain`, no console); all diagnostics go to `D:\debug.txt`, encoded in GBK. `README.md` itself is GBK-encoded and may be rejected by the Read/Edit tools; use `iconv -f GBK -t UTF-8` when needed.
+Windows-only remote-control helper (`PcRemoteController.exe`, described in README as “用于辅助远程控制电脑”). It is normally invoked over Windows OpenSSH with one Chinese command, e.g. `PcRemoteController.exe 关闭键盘`. It is a GUI-subsystem executable (`WinMain`). Detailed diagnostics are appended to `D:\debug.txt` (GBK); command results are also written to stdout/console when the caller provides one. Exit codes: `0` success, `1` execution failure, `2` unknown command. `README.md` itself is GBK-encoded and may be rejected by the Read/Edit tools; use `iconv -f GBK -t UTF-8` when needed.
 
 ## Build and run
 
@@ -27,10 +27,15 @@ MSYS_NO_PATHCONV=1 schtasks /run /tn "PcRemoteController_Agent"
 There is no automated test suite (`src/test_main.cpp` is not in the vcxproj). Validate with the built-in diagnostics and the log:
 
 ```bash
+./x64/Release/PcRemoteController.exe --help
 ./x64/Release/PcRemoteController.exe --agent-ping
 ./x64/Release/PcRemoteController.exe --list-keyboards
 tail -40 /d/debug.txt | iconv -f GBK -t UTF-8
 ```
+
+All configurations compile with `/utf-8`; keep source files UTF-8 (no BOM). Do not remove the flag: the Chinese console result strings depend on it.
+
+Console output requires a caller that waits for the GUI process (direct invocation or PowerShell `Start-Process -Wait`). `cmd /c` and PowerShell's `&` may return before the process exits, losing stdout and the exit code; over SSH this depends on how sshd waits for the process tree.
 
 Do not disable the keyboard for a casual test unless you can SSH back in to re-enable it or are prepared to reboot (the guard task restores it at boot). `--debug` truncates `D:\debug.txt`.
 
@@ -38,16 +43,16 @@ Do not disable the keyboard for a casual test unless you can SSH back in to re-e
 
 `src/cmd_contorller.cpp:WinMain`:
 
-1. Handles ASCII internal modes via `HasArg`: `--agent`, `--install-agent`, `--uninstall-agent`, `--agent-ping`, `--list-keyboards`, `--enable-keyboard`, `--install-keyboard-guard`, `--uninstall-keyboard-guard`.
+1. Handles ASCII internal modes via `HasArg`: `--help` / `--list-commands`, `--agent`, `--install-agent`, `--uninstall-agent`, `--agent-ping`, `--list-keyboards`, `--enable-keyboard`, `--install-keyboard-guard`, `--uninstall-keyboard-guard`. `--agent` returns before console setup; every other mode calls `Console::EnsureAttached()` first and prints a short result.
 2. `SleepController::HandleHelperMode` handles the internal sleep helper (`--delayed-suspend <ms> [--scheduled]`).
-3. Otherwise the ANSI command line (`szCmdLine`, GBK) is matched as a substring by controllers; **first match wins**. Order: Volume → Keyboard → Sleep → Media.
+3. Otherwise the ANSI command line (`szCmdLine`, GBK) is matched as a substring by controllers; **first match wins**. Order: Volume → Keyboard → Sleep → Media. `Execute` returns `bool`; `WinMain` maps it to exit code 0/1 and returns 2 when no controller matched.
 
-Chinese literals are UTF-8 in source; each controller has a local `GBK()` helper that converts them to the ANSI code page before comparing with `szCmdLine`. Keep that pattern when adding Chinese keywords. Register new controllers in `cmd_contorller.cpp` (order matters) and in `PcRemoteController.vcxproj`.
+Chinese literals are UTF-8 in source; each controller has a local `GBK()` helper that converts them to the ANSI code page before comparing with `szCmdLine`. Keep that pattern when adding Chinese keywords. Console result strings stay UTF-8 and go through `src/utils/Console.h`. Register new controllers in `cmd_contorller.cpp` (order matters) and in `PcRemoteController.vcxproj`.
 
 ## Architecture
 
 ### Controller model
-`src/controller/BaseController.h` defines `Match(const std::string&)` / `Execute(const std::string&)`.
+`src/controller/BaseController.h` defines `Match(const std::string&)` / `Execute(const std::string&)`; `Execute` returns `true` on success and prints a short Chinese result line.
 
 - **VolumeController** — Core Audio `IAudioEndpointVolume`; keywords 音量增加/提高音量/增加音量, 音量减少/降低音量/减少音量, 设置音量, with an optional number (defaults 5 / 50).
 - **KeyboardController** — 关闭键盘 / 打开键盘; delegates to `src/device/KeyboardDevices.*` and `src/device/KeyboardGuard.*`.
@@ -81,11 +86,15 @@ The suspend must happen after the SSH call returns, but Windows OpenSSH puts chi
 - `SleepController::Execute` spawns a helper copy with `CREATE_BREAKAWAY_FROM_JOB`; if denied, it registers the one-shot task `PcRemoteController_Sleep` (`--delayed-suspend 1000 --scheduled`) so the Task Scheduler service launches it outside the job.
 - Delay is `kSuspendDelayMs = 1000`; the helper deletes the one-shot task before/after suspending and calls `SetSuspendState(TRUE, FALSE, FALSE)`.
 
+### Console output
+`src/utils/Console.h` provides best-effort stdout/stderr for the GUI-subsystem exe. `Console::EnsureAttached()` calls `AttachConsole(ATTACH_PARENT_PROCESS)` and falls back to `CONOUT$`; real consoles receive UTF-16 through `WriteConsoleW`, pipes and redirected files receive UTF-8 bytes through `WriteFile`. There is deliberately no `AllocConsole`, so the agent and scheduled helpers never pop a window; when no console or pipe exists, writes are no-ops. Detailed diagnostics stay in the log.
+
 ### Logging
 `src/utils/Logger.h`: `LOG` appends to `D:\debug.txt` via `fopen(..., "a")`; `g_DebugMode` defaults to true. **Capture `GetLastError()` before calling `LOG`** — the `fopen` inside the macro overwrites it. Existing code follows this; keep the pattern in new error paths.
 
 ## Operational notes
 
+- Exit codes: `0` success, `1` execution failure, `2` unknown command (no controller matched). Internal diagnostic modes keep their 0/1 convention.
 - Keyboard/agent installation and keyboard state changes require an elevated shell. The user's SSH session runs at High Mandatory Level; a local non-elevated shell logs `elevated=0` and refuses keyboard operations.
 - Scheduled tasks: `PcRemoteController_Agent` (logon, interactive), `PcRemoteController_KeyboardRestore` (onstart, SYSTEM), `PcRemoteController_Sleep` (one-shot, only during a sleep command).
 - `src/api_server.cpp` is empty but listed in the project; `src/test_main.cpp` is not built.

@@ -1,6 +1,8 @@
 #include "VolumeController.h"
+#include "../utils/Console.h"
 #include "../utils/Logger.h"
 #include <cstdlib>
+#include <string>
 
 static std::string GBK(const char* utf8) {
     int len = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
@@ -20,18 +22,33 @@ static int ExtractNumber(const std::string& str, int defaultValue) {
     return (pos != std::string::npos) ? std::atoi(str.c_str() + pos) : defaultValue;
 }
 
-static IAudioEndpointVolume* GetVolumeControl() {
-    CoInitialize(NULL);
+static IAudioEndpointVolume* GetVolumeControl(bool& comInitialized) {
+    comInitialized = false;
+    if (FAILED(CoInitialize(NULL))) {
+        return nullptr;
+    }
+    comInitialized = true;
+
     IMMDeviceEnumerator* pEnum = nullptr;
-    CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator), (void**)&pEnum);
-    if (!pEnum) return nullptr;
+    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_ALL,
+                                  __uuidof(IMMDeviceEnumerator), (void**)&pEnum);
+    if (FAILED(hr) || !pEnum) {
+        return nullptr;
+    }
+
     IMMDevice* pDevice = nullptr;
-    pEnum->GetDefaultAudioEndpoint(eRender, eConsole, &pDevice);
+    hr = pEnum->GetDefaultAudioEndpoint(eRender, eConsole, &pDevice);
     pEnum->Release();
-    if (!pDevice) return nullptr;
+    if (FAILED(hr) || !pDevice) {
+        return nullptr;
+    }
+
     IAudioEndpointVolume* pVolume = nullptr;
-    pDevice->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, NULL, (void**)&pVolume);
+    hr = pDevice->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, NULL, (void**)&pVolume);
     pDevice->Release();
+    if (FAILED(hr) || !pVolume) {
+        return nullptr;
+    }
     return pVolume;
 }
 
@@ -45,40 +62,80 @@ bool VolumeController::Match(const std::string& cmd) {
            cmd.find(GBK("设置音量")) != std::string::npos;
 }
 
-void VolumeController::Execute(const std::string& cmd) {
+bool VolumeController::Execute(const std::string& cmd) {
     if (cmd.find(GBK("音量增加")) != std::string::npos || cmd.find(GBK("提高音量")) != std::string::npos || cmd.find(GBK("增加音量")) != std::string::npos) {
         LOG("Match: volume up\n");
-        AdjustVolume(ExtractNumber(cmd, 5));
-    } else if (cmd.find(GBK("音量减少")) != std::string::npos || cmd.find(GBK("降低音量")) != std::string::npos || cmd.find(GBK("减少音量")) != std::string::npos) {
-        LOG("Match: volume down\n");
-        AdjustVolume(-ExtractNumber(cmd, 5));
-    } else if (cmd.find(GBK("设置音量")) != std::string::npos) {
-        LOG("Match: set volume\n");
-        SetVolume(ExtractNumber(cmd, 50));
+        int amount = ExtractNumber(cmd, 5);
+        bool ok = AdjustVolume(amount);
+        if (ok) {
+            Console::WriteLine("音量已增加 " + std::to_string(amount));
+        } else {
+            Console::WriteLine("音量调整失败（未找到音频设备）");
+        }
+        return ok;
     }
+    if (cmd.find(GBK("音量减少")) != std::string::npos || cmd.find(GBK("降低音量")) != std::string::npos || cmd.find(GBK("减少音量")) != std::string::npos) {
+        LOG("Match: volume down\n");
+        int amount = ExtractNumber(cmd, 5);
+        bool ok = AdjustVolume(-amount);
+        if (ok) {
+            Console::WriteLine("音量已减少 " + std::to_string(amount));
+        } else {
+            Console::WriteLine("音量调整失败（未找到音频设备）");
+        }
+        return ok;
+    }
+    if (cmd.find(GBK("设置音量")) != std::string::npos) {
+        LOG("Match: set volume\n");
+        int volume = ExtractNumber(cmd, 50);
+        if (volume < 0) volume = 0;
+        if (volume > 100) volume = 100;
+        bool ok = SetVolume(volume);
+        if (ok) {
+            Console::WriteLine("音量已设置为 " + std::to_string(volume));
+        } else {
+            Console::WriteLine("音量设置失败（未找到音频设备）");
+        }
+        return ok;
+    }
+    return false;
 }
 
-void VolumeController::SetVolume(int volume) {
+bool VolumeController::SetVolume(int volume) {
     if (volume < 0) volume = 0;
     if (volume > 100) volume = 100;
-    IAudioEndpointVolume* pVolume = GetVolumeControl();
+    bool comInitialized = false;
+    IAudioEndpointVolume* pVolume = GetVolumeControl(comInitialized);
+    bool ok = false;
     if (pVolume) {
-        pVolume->SetMasterVolumeLevelScalar((float)volume / 100.0f, NULL);
+        HRESULT hr = pVolume->SetMasterVolumeLevelScalar((float)volume / 100.0f, NULL);
+        ok = SUCCEEDED(hr);
         pVolume->Release();
     }
-    CoUninitialize();
+    if (comInitialized) {
+        CoUninitialize();
+    }
+    return ok;
 }
 
-void VolumeController::AdjustVolume(int delta) {
-    IAudioEndpointVolume* pVolume = GetVolumeControl();
+bool VolumeController::AdjustVolume(int delta) {
+    bool comInitialized = false;
+    IAudioEndpointVolume* pVolume = GetVolumeControl(comInitialized);
+    bool ok = false;
     if (pVolume) {
         float current = 0.0f;
-        pVolume->GetMasterVolumeLevelScalar(&current);
-        int newVolume = (int)(current * 100) + delta;
-        if (newVolume < 0) newVolume = 0;
-        if (newVolume > 100) newVolume = 100;
-        pVolume->SetMasterVolumeLevelScalar((float)newVolume / 100.0f, NULL);
+        HRESULT hr = pVolume->GetMasterVolumeLevelScalar(&current);
+        if (SUCCEEDED(hr)) {
+            int newVolume = (int)(current * 100.0f) + delta;
+            if (newVolume < 0) newVolume = 0;
+            if (newVolume > 100) newVolume = 100;
+            hr = pVolume->SetMasterVolumeLevelScalar((float)newVolume / 100.0f, NULL);
+            ok = SUCCEEDED(hr);
+        }
         pVolume->Release();
     }
-    CoUninitialize();
+    if (comInitialized) {
+        CoUninitialize();
+    }
+    return ok;
 }

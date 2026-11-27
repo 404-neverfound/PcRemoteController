@@ -9,8 +9,8 @@
 class VolumeController : public BaseController {
 public:
     bool Match(const std::string& cmd) override;
-    void Execute(const std::string& cmd) override;
+    bool Execute(const std::string& cmd) override;
 private:
-    void SetVolume(int volume);
-    void AdjustVolume(int delta);
+    bool SetVolume(int volume);
+    bool AdjustVolume(int delta);
 };
