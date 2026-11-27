@@ -126,8 +126,10 @@
     <ClCompile Include="src\cmd_contorller.cpp" />
     <ClCompile Include="src\controller\VolumeController.cpp" />
     <ClCompile Include="src\controller\MediaController.cpp" />
-    <ClCompile Include="src\controller\BluetoothController.cpp" />
+    <ClCompile Include="src\controller\KeyboardController.cpp" />
     <ClCompile Include="src\controller\SleepController.cpp" />
+    <ClCompile Include="src\device\KeyboardDevices.cpp" />
+    <ClCompile Include="src\device\KeyboardGuard.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\agent\AgentClient.h" />
@@ -135,10 +137,15 @@
     <ClInclude Include="src\agent\AgentServer.h" />
     <ClInclude Include="src\controller\VolumeController.h" />
     <ClInclude Include="src\controller\MediaController.h" />
-    <ClInclude Include="src\controller\BluetoothController.h" />
+    <ClInclude Include="src\controller\KeyboardController.h" />
     <ClInclude Include="src\controller\SleepController.h" />
+    <ClInclude Include="src\device\KeyboardDevices.h" />
+    <ClInclude Include="src\device\KeyboardGuard.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Target Name="CopyKeyboardTargets" AfterTargets="Build" Condition="Exists('$(ProjectDir)config\keyboard_targets.txt')">
+    <Copy SourceFiles="$(ProjectDir)config\keyboard_targets.txt" DestinationFolder="$(OutDir)" Condition="!Exists('$(OutDir)keyboard_targets.txt')" />
+  </Target>
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
 </Project>

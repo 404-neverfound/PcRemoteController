@@ -1,0 +1,16 @@
+# PcRemoteController keyboard targets
+#
+# Rules are case-insensitive prefix matches.
+#   - A plain line matches the device instance id or any hardware id.
+#   - A line starting with "parent:" matches the parent device instance id.
+#
+# Current target: ROG STRIX SCOPE II 96 WIRELESS via ROG OMNI RECEIVER.
+# COL01 carries the keyboard input; COL02 is not needed.
+HID\VID_0B05&PID_1ACE&MI_00&COL01
+#
+# Add more keyboards on separate lines, for example:
+# HID\VID_046D&PID_C547&MI_01&COL01
+#
+# Bluetooth mode: switch the keyboard to Bluetooth, run --list-keyboards and
+# adjust/uncomment this rule with the observed parent id:
+# parent:BTHLE\DEV_EF14B804F500

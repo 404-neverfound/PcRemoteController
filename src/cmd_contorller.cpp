@@ -9,8 +9,10 @@
 #include "controller/BaseController.h"
 #include "controller/VolumeController.h"
 #include "controller/MediaController.h"
-#include "controller/BluetoothController.h"
+#include "controller/KeyboardController.h"
 #include "controller/SleepController.h"
+#include "device/KeyboardDevices.h"
+#include "device/KeyboardGuard.h"
 #include "utils/Logger.h"
 
 #pragma comment(lib, "Ole32.lib")
@@ -52,6 +54,27 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine,
             LOG("Agent ping: %s (%ls)\n", ok ? "ok" : "failed", response.c_str());
             return ok ? 0 : 1;
         }
+        if (HasArg(L"--list-keyboards")) {
+            KeyboardDevices::ListDevices();
+            return 0;
+        }
+        if (HasArg(L"--enable-keyboard")) {
+            return KeyboardGuard::RunBootEnable() ? 0 : 1;
+        }
+        if (HasArg(L"--install-keyboard-guard")) {
+            if (!KeyboardDevices::IsElevated()) {
+                LOG("KeyboardGuard: administrator rights required\n");
+                return 1;
+            }
+            return KeyboardGuard::EnsureTask() ? 0 : 1;
+        }
+        if (HasArg(L"--uninstall-keyboard-guard")) {
+            if (!KeyboardDevices::IsElevated()) {
+                LOG("KeyboardGuard: administrator rights required\n");
+                return 1;
+            }
+            return KeyboardGuard::RemoveTask() ? 0 : 1;
+        }
 
         int helperExitCode = 0;
         if (SleepController::HandleHelperMode(helperExitCode)) {
@@ -71,7 +94,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine,
 
         std::vector<BaseController*> controllers = {
             new VolumeController(),
-            new BluetoothController(),
+            new KeyboardController(),
             new SleepController(),
             new MediaController()
         };
