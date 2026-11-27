@@ -20,7 +20,7 @@
 //   2. Otherwise register a one-shot Task Scheduler task. It is launched by
 //      the Task Scheduler service, which is outside the SSH session's job.
 // The helper waits a moment and then suspends (or hibernates) the machine.
-static const DWORD kSuspendDelayMs = 2000;
+static const DWORD kSuspendDelayMs = 1000;
 static const wchar_t* kTaskName = L"PcRemoteController_Sleep";
 static const wchar_t* kHelperArg = L"--delayed-suspend";
 static const wchar_t* kScheduledArg = L"--scheduled";
@@ -120,7 +120,7 @@ static bool SpawnHelperViaScheduler(const std::wstring& helperArgs) {
     }
 
     // The action stored in the task:
-    //   "C:\path\PcRemoteController.exe" --delayed-suspend 2000 --scheduled
+    //   "C:\path\PcRemoteController.exe" --delayed-suspend 1000 --scheduled
     // It has to be passed to schtasks /tr as a single, quoted argument, so the
     // quotes belonging to the action itself are escaped. --scheduled tells the
     // helper to remove the one-shot task before suspending.
