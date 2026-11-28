@@ -15,6 +15,7 @@
 #include "controller/ImageClipboardController.h"
 #include "device/KeyboardDevices.h"
 #include "device/KeyboardGuard.h"
+#include "utils/AuditLog.h"
 #include "utils/Console.h"
 #include "utils/Logger.h"
 
@@ -55,6 +56,8 @@ static void PrintHelp() {
     Console::WriteLine("  输入文字 <文本>       输入到当前前台窗口");
     Console::WriteLine("  粘贴文字 <文本>       通过剪贴板粘贴（会覆盖剪贴板）");
     Console::WriteLine("  复制文字 <文本>       只写入剪贴板，不执行粘贴");
+    Console::WriteLine("  以上命令加 -stdin     从 stdin 读取 UTF-8 文本，支持多行");
+    Console::WriteLine("                        例: 复制文字 -stdin < 文本.txt");
     Console::WriteLine("图片:");
     Console::WriteLine("  复制图片 -base64      从 stdin 读取 Base64 图片并写入剪贴板");
     Console::WriteLine("                        （供 iOS 快捷指令“通过 SSH 运行脚本”调用）");
@@ -177,12 +180,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine,
             new MediaController()
         };
 
+        static const char* const kAuditNames[] = {
+            "text", "image.clipboard", "volume", "keyboard", "sleep", "media"
+        };
+
         bool matched = false;
         bool executed = false;
-        for (auto* controller : controllers) {
-            if (controller->Match(cmd)) {
+        for (size_t i = 0; i < controllers.size(); ++i) {
+            if (controllers[i]->Match(cmd)) {
                 matched = true;
-                executed = controller->Execute(cmd);
+                // TextController overrides the name with the matched keyword
+                // and records whether the text came from stdin.
+                AuditLog::SetCommand(kAuditNames[i]);
+                AuditLog::SetSource("arg");
+                executed = controllers[i]->Execute(cmd);
                 break;
             }
         }
@@ -194,9 +205,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine,
         if (!matched) {
             LOG("No controller matched the command\n");
             Console::WriteErrorLine("未知命令，使用 --help 查看支持的命令");
+            AuditLog::Write(false, false, 2);
             return 2;
         }
-        return executed ? 0 : 1;
+        int exitCode = executed ? 0 : 1;
+        AuditLog::Write(true, executed, exitCode);
+        return exitCode;
     } catch(...) {
         return 1;
     }

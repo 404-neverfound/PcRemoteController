@@ -30,6 +30,14 @@ PcRemoteController.exe <命令>
 | 打开键盘 | `打开键盘`（需要管理员权限） |
 | 休眠 | `休眠` |
 
+文字类命令（`输入文字` / `粘贴文字` / `复制文字`）支持 `-stdin`：从标准输入读取 UTF-8 文本，支持多行，不经过 SSH 命令行的 shell 解析。
+
+```
+type 文本.txt | PcRemoteController.exe 复制文字 -stdin
+```
+
+Windows OpenSSH 默认由 cmd.exe 执行远程命令，命令行里的换行会在第一处被截断，因此多行文本请使用 `-stdin`。iOS 快捷指令“通过 SSH 运行脚本”可以把文本填在“输入”里，命令填 `PcRemoteController.exe 复制文字 -stdin`。
+
 命令使用子串匹配，可以带其他文字。例如：
 
 ```
@@ -112,4 +120,6 @@ PcRemoteController.exe --uninstall-agent         # 卸载 Agent 登录任务
 PcRemoteController.exe --uninstall-keyboard-guard # 卸载键盘恢复任务
 ```
 
-详细日志写入 `D:\debug.txt`（GBK 编码）。`--debug` 会先清空日志。
+详细日志写入 `D:\debug.txt`（GBK 编码，每行带本地时间戳）。`--debug` 会先清空日志。
+
+每次常规命令调用还会向 `D:\calls.log` 追加一行审计记录（GBK）：时间、命令关键字、文字来源（`arg` / `stdin`，仅文字命令）、结果（`OK` / `FAIL` / `UNKNOWN`）和退出码。审计日志不记录文字正文。

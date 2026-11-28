@@ -151,6 +151,7 @@
     <ClInclude Include="src\controller\SleepController.h" />
     <ClInclude Include="src\device\KeyboardDevices.h" />
     <ClInclude Include="src\device\KeyboardGuard.h" />
+    <ClInclude Include="src\utils\AuditLog.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Target Name="CopyKeyboardTargets" AfterTargets="Build" Condition="Exists('$(ProjectDir)config\keyboard_targets.txt')">
