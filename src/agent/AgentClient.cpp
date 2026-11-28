@@ -177,8 +177,26 @@ static bool ReadResponse(HANDLE pipe, std::string& response, DWORD timeoutMs) {
     return true;
 }
 
-bool AgentClient::SendCommand(const std::wstring& command, std::wstring& response,
-                              DWORD timeoutMs) {
+static bool IsSensitiveCommand(const std::string& command) {
+    return command.compare(0, 6, "input.") == 0 ||
+           command.compare(0, 10, "clipboard.") == 0;
+}
+
+static bool WriteAll(HANDLE pipe, const char* data, size_t size) {
+    while (size > 0) {
+        DWORD chunk = static_cast<DWORD>(size > 64 * 1024 ? 64 * 1024 : size);
+        DWORD written = 0;
+        if (!WriteFile(pipe, data, chunk, &written, NULL) || written == 0) {
+            return false;
+        }
+        data += written;
+        size -= written;
+    }
+    return true;
+}
+
+bool AgentClient::SendRawCommand(const std::string& command, std::wstring& response,
+                                 DWORD timeoutMs) {
     response.clear();
 
     DWORD sessionId = GetInteractiveSessionId();
@@ -204,9 +222,11 @@ bool AgentClient::SendCommand(const std::wstring& command, std::wstring& respons
         return false;
     }
 
-    std::string request = "PCR1 " + ToUtf8(command) + "\n";
-    DWORD written = 0;
-    BOOL sent = WriteFile(pipe, request.data(), static_cast<DWORD>(request.size()), &written, NULL);
+    // Write the request in pieces: image payloads can be tens of megabytes and
+    // the named pipe streams them through a small buffer.
+    bool sent = WriteAll(pipe, "PCR1 ", 5) &&
+                WriteAll(pipe, command.data(), command.size()) &&
+                WriteAll(pipe, "\n", 1);
 
     std::string rawResponse;
     bool received = sent && ReadResponse(pipe, rawResponse, timeoutMs);
@@ -214,21 +234,29 @@ bool AgentClient::SendCommand(const std::wstring& command, std::wstring& respons
 
     if (!received) {
         response = L"no response from agent";
-        LOG("AgentClient: failed to send or receive\n");
+        LOG("AgentClient: failed to send or receive (%d bytes)\n", (int)command.size());
         return false;
     }
 
     response = FromUtf8(rawResponse);
-    if (command.compare(0, 6, L"input.") == 0) {
-        // Do not write the base64 text payload to the log: it may contain
-        // secrets. Log only the command name and payload size.
-        std::wstring name = command.substr(0, command.find(L' '));
+    if (IsSensitiveCommand(command)) {
+        // Text and image payloads may contain secrets; log only the command
+        // name and size.
+        std::string name = command.substr(0, command.find(' '));
+        std::wstring wideName = FromUtf8(name);
         LOG("AgentClient: sent '%ls' (%d bytes), response '%ls'\n",
-            name.c_str(), (int)command.size(), response.c_str());
+            wideName.c_str(), (int)command.size(), response.c_str());
     } else {
-        LOG("AgentClient: sent '%ls', response '%ls'\n", command.c_str(), response.c_str());
+        std::wstring wideCommand = FromUtf8(command);
+        LOG("AgentClient: sent '%ls', response '%ls'\n",
+            wideCommand.c_str(), response.c_str());
     }
     return rawResponse.compare(0, 2, "OK") == 0;
+}
+
+bool AgentClient::SendCommand(const std::wstring& command, std::wstring& response,
+                              DWORD timeoutMs) {
+    return SendRawCommand(ToUtf8(command), response, timeoutMs);
 }
 
 bool AgentClient::MediaToggle() {

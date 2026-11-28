@@ -12,6 +12,7 @@
 #include "controller/KeyboardController.h"
 #include "controller/SleepController.h"
 #include "controller/TextController.h"
+#include "controller/ImageClipboardController.h"
 #include "device/KeyboardDevices.h"
 #include "device/KeyboardGuard.h"
 #include "utils/Console.h"
@@ -54,6 +55,12 @@ static void PrintHelp() {
     Console::WriteLine("  输入文字 <文本>       输入到当前前台窗口");
     Console::WriteLine("  粘贴文字 <文本>       通过剪贴板粘贴（会覆盖剪贴板）");
     Console::WriteLine("  复制文字 <文本>       只写入剪贴板，不执行粘贴");
+    Console::WriteLine("图片:");
+    Console::WriteLine("  复制图片 -base64      从 stdin 读取 Base64 图片并写入剪贴板");
+    Console::WriteLine("                        （供 iOS 快捷指令“通过 SSH 运行脚本”调用）");
+    Console::WriteLine("  复制图片 <路径>       读取电脑上的图片文件并写入剪贴板");
+    Console::WriteLine("  最新截图 [目录]       取用户目录 latest.* 或 Pictures\\PhoneScreenshots");
+    Console::WriteLine("                        中最新的一张图片");
     Console::WriteLine("键盘（需要管理员权限）:");
     Console::WriteLine("  关闭键盘 / 打开键盘");
     Console::WriteLine("电源:");
@@ -163,6 +170,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine,
             // TextController must stay first: it accepts arbitrary text after
             // its prefix, which may contain other controllers' keywords.
             new TextController(),
+            new ImageClipboardController(),
             new VolumeController(),
             new KeyboardController(),
             new SleepController(),

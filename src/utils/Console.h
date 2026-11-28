@@ -46,12 +46,23 @@ namespace Console {
         return handle;
     }
 
+    // The stdin handle as inherited from the caller. Saved before
+    // AttachConsole(): attaching updates the standard handles of a
+    // GUI-subsystem process, but the original pipe or redirected file must
+    // stay readable for commands such as 复制图片 -base64.
+    inline HANDLE& OriginalStdin() {
+        static HANDLE handle = INVALID_HANDLE_VALUE;
+        return handle;
+    }
+
     inline void EnsureAttached() {
         static bool initialized = false;
         if (initialized) {
             return;
         }
         initialized = true;
+
+        OriginalStdin() = GetStdHandle(STD_INPUT_HANDLE);
 
         // A GUI-subsystem process normally has no console. Attach to the
         // parent's console when there is one; handles inherited from SSH or a

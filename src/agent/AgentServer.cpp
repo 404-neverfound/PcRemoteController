@@ -1,9 +1,11 @@
 #include "AgentServer.h"
+#include "ClipboardImage.h"
 #include "DesktopNotify.h"
 #include "../utils/Logger.h"
 #include <windows.h>
 #include <wincrypt.h>
 #include <sddl.h>
+#include <cstdio>
 #include <cstring>
 #include <cwchar>
 #include <string>
@@ -16,9 +18,14 @@
 // targets, even when several users/sessions are logged on at the same time.
 static const wchar_t* kPipePrefix = L"\\\\.\\pipe\\PcRemoteController.Agent.";
 static const wchar_t* kMutexPrefix = L"Local\\PcRemoteController.Agent.";
-// Text input is base64-encoded on the wire, so allow a payload large enough
-// for the ~32K UTF-16 limit of a Windows command line.
-static const DWORD kMaxMessageBytes = 256 * 1024;
+// Text input is base64-encoded on the wire. Image import (phone screenshots)
+// also arrives as a single Base64 request, so the logical message limit is
+// much larger than a text command; the named-pipe buffers themselves stay
+// small and the request is streamed through them.
+static const size_t kMaxImageBytes = 24 * 1024 * 1024;
+static const size_t kMaxBase64Chars = ((kMaxImageBytes + 2) / 3) * 4;
+static const size_t kMaxMessageBytes = kMaxBase64Chars + 256;
+static const DWORD kPipeBufferBytes = 64 * 1024;
 static const DWORD kRequestTimeoutMs = 10000;
 static const size_t kMaxInputUnits = 20000;
 
@@ -88,14 +95,17 @@ static bool SendMediaToggleKey() {
     return true;
 }
 
-static bool Base64Decode(const std::string& input, std::string& output) {
+static bool Base64Decode(const char* input, size_t length, std::string& output) {
     output.clear();
-    if (input.empty()) {
+    if (length == 0) {
         return true;
+    }
+    if (length > 0xFFFFFFFFull) {
+        return false;
     }
 
     DWORD size = 0;
-    if (!CryptStringToBinaryA(input.c_str(), (DWORD)input.size(), CRYPT_STRING_BASE64,
+    if (!CryptStringToBinaryA(input, (DWORD)length, CRYPT_STRING_BASE64,
                               NULL, &size, NULL, NULL)) {
         return false;
     }
@@ -104,13 +114,18 @@ static bool Base64Decode(const std::string& input, std::string& output) {
     if (size == 0) {
         return true;
     }
-    if (!CryptStringToBinaryA(input.c_str(), (DWORD)input.size(), CRYPT_STRING_BASE64,
-                              reinterpret_cast<BYTE*>(&output[0]), &size, NULL, NULL)) {
+    DWORD actual = size;
+    if (!CryptStringToBinaryA(input, (DWORD)length, CRYPT_STRING_BASE64,
+                              reinterpret_cast<BYTE*>(&output[0]), &actual, NULL, NULL)) {
         output.clear();
         return false;
     }
-    output.resize(size);
+    output.resize(actual);
     return true;
+}
+
+static bool Base64Decode(const std::string& input, std::string& output) {
+    return Base64Decode(input.data(), input.size(), output);
 }
 
 static bool Utf8ToWide(const std::string& text, std::wstring& result) {
@@ -291,12 +306,59 @@ static std::string HandleTextCommand(const std::string& command,
     return ok ? "OK\n" : "ERR 500 input failed\n";
 }
 
+// Imports a Base64-encoded image that is already in memory on the CLI side.
+// The image is never written to disk and its bytes are not logged.
+static std::string HandleImageCommand(const std::string& request,
+                                      size_t payloadOffset) {
+    try {
+        size_t payloadLength = request.size() - payloadOffset;
+        std::string bytes;
+        if (!Base64Decode(request.data() + payloadOffset, payloadLength, bytes)) {
+            return "ERR 400 invalid base64\n";
+        }
+        if (bytes.empty()) {
+            return "ERR 400 empty image\n";
+        }
+        if (bytes.size() > kMaxImageBytes) {
+            return "ERR 413 image too large\n";
+        }
+
+        ClipboardImage::Result result = ClipboardImage::CopyToClipboard(bytes);
+        if (!result.ok) {
+            LOG("Agent: clipboard image failed: %s\n", result.error.c_str());
+            if (result.error == "image too large") {
+                return "ERR 413 image too large\n";
+            }
+            if (result.error == "invalid image") {
+                return "ERR 415 unsupported image\n";
+            }
+            if (result.error == "clipboard busy") {
+                return "ERR 500 clipboard busy\n";
+            }
+            return "ERR 500 image failed\n";
+        }
+
+        LOG("Agent: clipboard image copied: %dx%d\n", result.width, result.height);
+        wchar_t message[128];
+        swprintf_s(message, L"图片已复制到剪贴板（%d × %d）",
+                   result.width, result.height);
+        DesktopNotify::Show(message);
+
+        char reply[64];
+        sprintf_s(reply, "OK %dx%d\n", result.width, result.height);
+        return reply;
+    } catch (...) {
+        LOG("Agent: clipboard image threw an exception\n");
+        return "ERR 500 image failed\n";
+    }
+}
+
 // Reads one newline-terminated request with a timeout so a stalled client
 // cannot block the agent forever.
 static bool ReadRequest(HANDLE pipe, std::string& request) {
     std::string data;
     DWORD64 deadline = GetTickCount64() + kRequestTimeoutMs;
-    char buffer[256];
+    char buffer[64 * 1024];
 
     while (GetTickCount64() < deadline && data.size() <= kMaxMessageBytes) {
         DWORD available = 0;
@@ -308,12 +370,20 @@ static bool ReadRequest(HANDLE pipe, std::string& request) {
             continue;
         }
 
-        DWORD read = 0;
-        if (!ReadFile(pipe, buffer, sizeof(buffer), &read, NULL) || read == 0) {
+        size_t remaining = kMaxMessageBytes + 1 - data.size();
+        DWORD toRead = (DWORD)(remaining < sizeof(buffer) ? remaining : sizeof(buffer));
+        if (toRead == 0) {
             return false;
         }
+
+        DWORD read = 0;
+        if (!ReadFile(pipe, buffer, toRead, &read, NULL) || read == 0) {
+            return false;
+        }
+
+        size_t searchFrom = data.size();
         data.append(buffer, read);
-        if (data.find('\n') != std::string::npos) {
+        if (data.find('\n', searchFrom) != std::string::npos) {
             break;
         }
     }
@@ -330,7 +400,7 @@ static bool ReadRequest(HANDLE pipe, std::string& request) {
         data.pop_back();
     }
 
-    request = data;
+    request.swap(data);
     return true;
 }
 
@@ -344,6 +414,14 @@ static std::string HandleRequest(const std::string& request) {
         return "ERR 400 bad request\n";
     }
 
+    // Image imports are large; handle them before copying the command out of
+    // the request and never write the payload to the log.
+    static const std::string kImagePrefix = "clipboard.image ";
+    if (request.compare(kPrefix.size(), kImagePrefix.size(), kImagePrefix) == 0) {
+        LOG("Agent: request: image input (%d bytes)\n", (int)request.size());
+        return HandleImageCommand(request, kPrefix.size() + kImagePrefix.size());
+    }
+
     std::string command = request.substr(kPrefix.size());
 
     static const std::string kTextPrefix = "input.text ";
@@ -354,6 +432,9 @@ static std::string HandleRequest(const std::string& request) {
     if (isTextInput) {
         // Do not log the text payload.
         LOG("Agent: request: text input (%d bytes)\n", (int)request.size());
+    } else if (request.size() > 16 * 1024) {
+        // Never dump a large payload, even if it uses an unknown command.
+        LOG("Agent: request: large command (%d bytes)\n", (int)request.size());
     } else {
         LOG("Agent: request: %s\n", request.c_str());
     }
@@ -383,8 +464,8 @@ static HANDLE CreateServerPipe(const std::wstring& pipeName, LPSECURITY_ATTRIBUT
         PIPE_ACCESS_DUPLEX,
         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
         1,
-        kMaxMessageBytes,
-        kMaxMessageBytes,
+        kPipeBufferBytes,
+        kPipeBufferBytes,
         0,
         sa);
 }

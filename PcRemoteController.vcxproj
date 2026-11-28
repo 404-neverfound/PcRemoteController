@@ -126,6 +126,7 @@
     <ClCompile Include="src\agent\AgentClient.cpp" />
     <ClCompile Include="src\agent\AgentInstall.cpp" />
     <ClCompile Include="src\agent\AgentServer.cpp" />
+    <ClCompile Include="src\agent\ClipboardImage.cpp" />
     <ClCompile Include="src\agent\DesktopNotify.cpp" />
     <ClCompile Include="src\api_server.cpp" />
     <ClCompile Include="src\cmd_contorller.cpp" />
@@ -134,6 +135,7 @@
     <ClCompile Include="src\controller\KeyboardController.cpp" />
     <ClCompile Include="src\controller\SleepController.cpp" />
     <ClCompile Include="src\controller\TextController.cpp" />
+    <ClCompile Include="src\controller\ImageClipboardController.cpp" />
     <ClCompile Include="src\device\KeyboardDevices.cpp" />
     <ClCompile Include="src\device\KeyboardGuard.cpp" />
   </ItemGroup>
@@ -141,6 +143,8 @@
     <ClInclude Include="src\agent\AgentClient.h" />
     <ClInclude Include="src\agent\AgentInstall.h" />
     <ClInclude Include="src\agent\AgentServer.h" />
+    <ClInclude Include="src\agent\ClipboardImage.h" />
+    <ClInclude Include="src\controller\ImageClipboardController.h" />
     <ClInclude Include="src\controller\VolumeController.h" />
     <ClInclude Include="src\controller\MediaController.h" />
     <ClInclude Include="src\controller\KeyboardController.h" />
